@@ -4,6 +4,8 @@
 # build_package.py - Main class for package management
 
 import argparse
+import json
+import os
 import subprocess
 import sys
 from datetime import datetime
@@ -168,6 +170,12 @@ class BuildPackage:
                 table.add_row("-b, --build {dev}", _("Commit/push and generate package"))
                 table.add_row("-c, --commit MSG", _("Just commit/push with the specified message"))
                 table.add_row("-F, --commit-file FILE", _("Read commit message from file (multi-line support)"))
+                table.add_row("--pr-edit NUMBER", _("Edit an existing pull request by number"))
+                table.add_row("--pr-title TITLE", _("Set pull request title (used with --pr-edit)"))
+                table.add_row("--pr-body BODY", _("Set pull request body text (used with --pr-edit)"))
+                table.add_row("--pr-body-file FILE", _("Read pull request body from file"))
+                table.add_row("--pr-draft-save NAME", _("Save PR draft locally by name"))
+                table.add_row("--pr-draft-load NAME", _("Load PR draft locally by name"))
                 table.add_row("-a, --aur PACKAGE", _("Build AUR package"))
                 table.add_row("-t, --tmate", _("Enable tmate for debugging"))
                 table.add_row("-n, --nocolor", _("Suppress color printing"))
@@ -182,6 +190,8 @@ class BuildPackage:
                     ("python main.py --gui", _("Open in GUI mode")),
                     ('python main.py -c "fix: bug fix"', _("Quick commit with message")),
                     ("python main.py -F commit_msg.txt", _("Commit with message from file")),
+                    ("python main.py --pr-edit 123 --pr-title \"New title\"", _("Edit PR title")),
+                    ("python main.py --pr-edit 123 --pr-body-file pr_body.txt", _("Edit PR body from file")),
                     ('python main.py -b dev -c "feat: new feature"', _("Build development package")),
                     ("python main.py -a package-name", _("Build AUR package")),
                 ]
@@ -219,6 +229,18 @@ class BuildPackage:
         parser.add_argument("-c", "--commit", help=_("Just commit/push with the specified message"))
 
         parser.add_argument("-F", "--commit-file", help=_("Read commit message from file (multi-line support)"))
+
+        parser.add_argument("--pr-edit", type=int, metavar="NUMBER", help=_("Edit an existing pull request by number"))
+
+        parser.add_argument("--pr-title", help=_("Set pull request title (used with --pr-edit)"))
+
+        parser.add_argument("--pr-body", help=_("Set pull request body text (used with --pr-edit)"))
+
+        parser.add_argument("--pr-body-file", help=_("Read pull request body text from file"))
+
+        parser.add_argument("--pr-draft-save", help=_("Save PR draft locally by name"))
+
+        parser.add_argument("--pr-draft-load", help=_("Load PR draft locally by name"))
 
         parser.add_argument("-a", "--aur", help=_("Build AUR package"))
 
@@ -1103,10 +1125,107 @@ the specific source code used to create this copy."""),
 
         return _check(commit_hash)
 
+    def _get_pr_draft_path(self, draft_name: str) -> str:
+        """Return absolute path to a local PR draft JSON file."""
+        safe_name = "".join(ch if ch.isalnum() or ch in ("-", "_", ".") else "_" for ch in draft_name.strip())
+        if not safe_name:
+            safe_name = "draft"
+        draft_dir = os.path.expanduser("~/.config/gitrepo/pr-drafts")
+        os.makedirs(draft_dir, exist_ok=True)
+        return os.path.join(draft_dir, f"{safe_name}.json")
+
+    def _load_pr_draft(self, draft_name: str) -> dict:
+        """Load title/body from a local PR draft file."""
+        draft_path = self._get_pr_draft_path(draft_name)
+        if not os.path.isfile(draft_path):
+            raise FileNotFoundError(draft_path)
+
+        with open(draft_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        if not isinstance(data, dict):
+            raise ValueError(_("Invalid draft format"))
+
+        title = data.get("title")
+        body = data.get("body")
+        return {
+            "title": title if isinstance(title, str) else None,
+            "body": body if isinstance(body, str) else None,
+        }
+
+    def _save_pr_draft(self, draft_name: str, title: str | None, body: str | None) -> str:
+        """Save title/body to a local PR draft file and return its path."""
+        draft_path = self._get_pr_draft_path(draft_name)
+        payload = {
+            "title": title or "",
+            "body": body or "",
+        }
+
+        with open(draft_path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+
+        return draft_path
+
+    def edit_pull_request_cli(self):
+        """Edit an existing pull request title/body from CLI options."""
+        pr_number = self.args.pr_edit
+        title = self.args.pr_title
+        body = self.args.pr_body
+
+        if self.args.pr_body_file:
+            try:
+                with open(self.args.pr_body_file, "r", encoding="utf-8") as f:
+                    body = f.read()
+            except OSError as e:
+                self.logger.log("red", _("Could not read PR body file: {0}").format(e))
+                return
+
+        if self.args.pr_draft_load:
+            try:
+                draft_data = self._load_pr_draft(self.args.pr_draft_load)
+                if title is None:
+                    title = draft_data.get("title")
+                if body is None:
+                    body = draft_data.get("body")
+            except FileNotFoundError:
+                self.logger.log(
+                    "red",
+                    _("PR draft '{0}' not found.").format(self.args.pr_draft_load),
+                )
+                return
+            except (OSError, ValueError, json.JSONDecodeError) as e:
+                self.logger.log("red", _("Could not load PR draft: {0}").format(e))
+                return
+
+        if title is None and body is None:
+            self.logger.log(
+                "yellow",
+                _("Nothing to edit. Use --pr-title, --pr-body, --pr-body-file, or --pr-draft-load."),
+            )
+            return
+
+        if self.args.pr_draft_save:
+            try:
+                draft_path = self._save_pr_draft(self.args.pr_draft_save, title, body)
+                self.logger.log("green", _("PR draft saved to: {0}").format(draft_path))
+            except OSError as e:
+                self.logger.log("red", _("Could not save PR draft: {0}").format(e))
+                return
+
+        if not self.github_api.ensure_github_token(self.logger):
+            return
+
+        pr_info = self.github_api.edit_pull_request(pr_number, title=title, body=body, logger=self.logger)
+        if pr_info:
+            self.logger.log("green", _("PR #{0} updated successfully.").format(pr_number))
+
     def run(self):
         """Executes main program flow"""
         # Check command line arguments
-        if self.args.commit and not self.args.build:
+        if self.args.pr_edit:
+            self.edit_pull_request_cli()
+
+        elif self.args.commit and not self.args.build:
             # Only commit/push (direct CLI path)
             from .commit_operations import commit_and_push_cli
             commit_and_push_cli(self)

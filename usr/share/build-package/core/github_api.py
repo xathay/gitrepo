@@ -973,6 +973,49 @@ class GitHubAPI:
             if logger:
                 logger.log("red", _("Error creating pull request: {0}").format(str(e)))
             return {}
+
+    def edit_pull_request(self, pr_number: int, title: str | None = None, body: str | None = None, logger=None) -> dict:
+        """Edit an existing pull request title/body."""
+        if not pr_number:
+            if logger:
+                logger.log("red", _("PR number is required"))
+            return {}
+
+        repo_name = GitUtils.get_repo_name()
+        if not repo_name:
+            if logger:
+                logger.log("red", _("Repository name could not be determined"))
+            return {}
+
+        payload = {}
+        if title is not None:
+            payload["title"] = title
+        if body is not None:
+            payload["body"] = body
+
+        if not payload:
+            if logger:
+                logger.log("yellow", _("Nothing to edit in PR"))
+            return {}
+
+        try:
+            url = f"https://api.github.com/repos/{repo_name}/pulls/{pr_number}"
+            response = requests.patch(url, json=payload, headers=self.headers, timeout=30)
+
+            if response.status_code != 200:
+                if logger:
+                    error_msg = response.json().get("message", "") if response.text else _("Unknown error")
+                    logger.log("red", _("Failed to edit PR: {0}").format(error_msg))
+                return {}
+
+            pr_info = response.json()
+            if logger:
+                logger.log("green", _("PR #{0} updated: {1}").format(pr_number, pr_info.get("html_url", "")))
+            return pr_info
+        except Exception as e:
+            if logger:
+                logger.log("red", _("Error editing pull request: {0}").format(e))
+            return {}
     
     def _find_existing_pr(self, repo_name: str, source_branch: str, target_branch: str) -> dict:
         """Find an existing open PR for the same branch combination"""
