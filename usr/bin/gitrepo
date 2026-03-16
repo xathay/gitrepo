@@ -1,5 +1,5 @@
 #!/bin/bash
-# Wrapper to run GitRepo GUI
+# Wrapper to run GitRepo entrypoint (GUI by default, CLI when flags/args are used)
 
 # Detect installation directory
 # FIRST check for local/development directory (relative to script location)
@@ -20,8 +20,10 @@ else
 fi
 
 # Check if target directory is inside a Git repository (when called from context menu)
-if [[ -n "$1" && -d "$1" ]]; then
+# Consume the path argument so it doesn't force CLI mode in main.py.
+if [[ $# -ge 1 && -d "$1" ]]; then
     TARGET_DIR="$1"
+    shift
     
     # Find git root by searching up the directory tree
     GIT_ROOT=""
@@ -48,5 +50,10 @@ if [[ -n "$1" && -d "$1" ]]; then
     cd "$GIT_ROOT" || exit 1
 fi
 
-# Run main_gui.py (don't pass args - cd already changed to target directory)
-exec python3 "$GITREPO_DIR/gui/main_gui.py"
+# Run unified entrypoint and preserve remaining CLI args.
+# Fallback to GUI entrypoint for legacy layouts that may not have main.py.
+if [[ -e "$GITREPO_DIR/main.py" ]]; then
+    exec python3 "$GITREPO_DIR/main.py" "$@"
+fi
+
+exec python3 "$GITREPO_DIR/gui/main_gui.py" "$@"
