@@ -369,6 +369,12 @@ class OverviewWidget(Gtk.Box):
 
             icon = Gtk.Image.new_from_icon_name(icon_name)
             row.add_prefix(icon)
+
+            # Activate a row to preview that file's diff before committing.
+            row.set_activatable(True)
+            row.add_suffix(Gtk.Image.new_from_icon_name("go-next-symbolic"))
+            row.connect("activated", self._on_changed_file_activated, filepath, status)
+
             self.changed_files_expander.add_row(row)
             self._changed_file_rows.append(row)
 
@@ -378,6 +384,11 @@ class OverviewWidget(Gtk.Box):
         )
         self.changed_files_expander.set_subtitle(_("Click to expand"))
         self.changed_files_group.set_visible(count > 0)
+
+    def _on_changed_file_activated(self, _row, filepath, status):
+        """Open a diff preview for the activated changed file."""
+        from gui.dialogs.diff_dialog import show_file_diff
+        show_file_diff(self.get_root(), filepath, status)
 
     def update_recent_activity(self):
         """Update recent activity information"""
